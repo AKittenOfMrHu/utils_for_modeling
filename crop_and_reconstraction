@@ -1,0 +1,156 @@
+# ===================== get patch by centers ===================================
+def get_patch_centers(
+        image,
+        patch_size=(18, 224, 224),
+        strides=(4, 20, 20),
+    ):
+    '''
+    :param data: (x, y, z)
+    :patch_size: (dx, dy, dz)
+    :return:
+    '''
+    centers = [[], [], []]
+    for j, (img_len, pt_len, stride) in enumerate(zip(image.shape, patch_size, strides)):
+        centers[j].append(pt_len // 2)
+        for _ in range((img_len - pt_len) // stride):
+            centers[j].append(centers[j][-1] + stride)
+    centers = np.meshgrid(*centers, indexing='ij')
+    return np.array(centers).reshape(len(patch_size), -1).transpose()
+
+
+def get_patch_by_center(image, center, patch_size):
+    mini = [c - len_ // 2 for c, len_ in zip(center, patch_size)]
+    maxi = [c + len_ // 2 for c, len_ in zip(center, patch_size)]
+    #print(image.shape, center, mini, maxi)
+    assert all(m >= 0 for m in mini) and all(m < img_len for m, img_len in zip(maxi, image.shape))
+    slices = [slice(mi, ma) for mi, ma in zip(mini, maxi)]
+    patch = image[slices]
+    assert np.sum(patch.shape) == np.sum(patch_size)
+    return patch
+
+# ================================ patch step-wise cropping
+
+def patch3d_step_cropping(image, uncer_mask, patch_size=(20, 368, 448)):
+    '''
+    :param data: (x, y, z)
+    :patch_size: (dx, dy, dz)
+    :return:
+    '''
+    Q, H, W = image.shape
+    pQ, pH, pW = patch_size
+    step_size = [ps//2 for ps in patch_size]
+
+    image_patches = []
+    uncer_patches = []
+    patch_coords = []
+
+    coord_q = 0
+    q_not_done = True
+    end_coord = []
+    step_num = [0, 0, 0]
+    while q_not_done:
+        step_num[0] += 1
+        coord_h = pH//2
+        h_not_done = True
+        while h_not_done:
+            step_num[1] += 1
+            coord_w = pW//2
+            w_not_done = True
+            while w_not_done:
+                step_num[2] += 1
+                # print(coord_i, coord_j, coord_k)
+                first_coord = [coord_q - pQ//2, coord_h - pH//2, coord_w - pW//2]
+                end_coord = [first_coord[0] + pQ, first_coord[1] + pH, first_coord[2] + pW]
+                image_patch = image[
+                                max(0, first_coord[0]):end_coord[0],
+                                max(0, first_coord[1]):end_coord[1],
+                                max(0, first_coord[2]):end_coord[2]]
+                uncer_patch = uncer_mask[
+                                max(0, first_coord[0]):end_coord[0],
+                                max(0, first_coord[1]):end_coord[1],
+                                max(0, first_coord[2]):end_coord[2]]
+
+                to_pad = [max(0, patch_size[i] - image_patch.shape[i]) for i in range(3)]
+                if max(to_pad) > 0:
+                    pad_before_part = [pd if fcd < 0 else 0 for pd, fcd in zip(to_pad, first_coord)]
+                    pad_after_part = [pd if fcd >= 0 else 0 for pd, fcd in zip(to_pad, first_coord)]
+                    to_pad = np.array([pad_before_part, pad_after_part]).T
+                    image_patch = np.pad(image_patch, to_pad)
+                    uncer_patch = np.pad(uncer_patch, to_pad)
+                image_patches.append(image_patch)
+                uncer_patches.append(uncer_patch)
+                patch_coords.append([coord_q, coord_h, coord_w])
+                w_not_done = True if end_coord[2] < W else False
+                coord_w += step_size[2]
+            h_not_done = True if end_coord[1] < H else False
+            coord_h += step_size[1]
+        q_not_done = True if end_coord[0] < Q else False
+        coord_q += step_size[0]
+
+    return image_patches, uncer_patches, patch_coords, step_num
+
+
+# ======================== reconstraction with gassin map =================================
+def get_gsnmap(patch_size, to_softmax=True, parts=(2, 2, 2)):
+    if not isinstance(parts, (tuple, list, np.ndarray)):
+        parts = [parts] * 3
+    gaussian_size = [patch_size[i]*2//parts[i] for i in range(len(patch_size))]
+    gaussian_map = np.zeros(gaussian_size,  dtype='float32')
+    gaussian_map[gaussian_size[0] // 2, gaussian_size[1] // 2, gaussian_size[2] // 2] = 1
+    sigmas = [ps * 0.15 for ps in gaussian_size]  # 0.425 for no softmax, 0.15 for softmax
+    gaussian_map = gaussian_filter(gaussian_map, sigmas, mode='constant', cval=0.0)
+    gaussian_map[gaussian_map == 0.] = np.min(gaussian_map[gaussian_map != 0.])
+    gaussian_map /= np.max(gaussian_map)
+
+    if to_softmax:
+        gaussian_map = gaussian_map.reshape(
+            [2, gaussian_size[0]//2, 2, gaussian_size[1]//2, 2, gaussian_size[2]//2]
+        ).transpose([0, 2, 4, 1, 3, 5]).reshape(
+            8, gaussian_size[0]//2, gaussian_size[1]//2, gaussian_size[2]//2
+        )
+        #gaussian_map = np.exp(gaussian_map)/np.exp(gaussian_map).sum(axis=0)
+        gaussian_map = gaussian_map / gaussian_map.sum(axis=0)
+        gaussian_map = gaussian_map.reshape(
+            2, 2, 2, gaussian_size[0]//2, gaussian_size[1]//2, gaussian_size[2]//2
+        ).transpose([0, 3, 1, 4, 2, 5]).reshape(gaussian_size)
+
+    if max(parts) > 2:
+        print(gaussian_size, gaussian_map.shape)
+        whole_gaussian_map = np.zeros(patch_size,  dtype='float32')
+        whole_gaussian_map[patch_size[0]//2 - gaussian_size[0]//2:patch_size[0]//2 + gaussian_size[0]//2,
+        patch_size[1]//2 - gaussian_size[1]//2:patch_size[1]//2 + gaussian_size[1]//2,
+        patch_size[2]//2 - gaussian_size[2]//2:patch_size[2]//2 + gaussian_size[2]//2] = gaussian_map
+    else:
+        whole_gaussian_map = gaussian_map
+    return whole_gaussian_map
+
+def patch3d_step_rebuild(image_patches, patch_coords, image_size, gassian_map, patch_size=(20, 368, 448)):
+    '''
+    :param data: (x, y, z)
+    :patch_size: (dx, dy, dz)
+    :return:
+    '''
+    Q, H, W = image_size
+    pQ, pH, pW = patch_size
+    rebuilded_image = np.zeros(image_size, dtype=np.float32)
+    weight_map = np.zeros(image_size, dtype=np.float32)
+    for coord, image_patch in zip(patch_coords, image_patches):
+        first_coord = [coord[0] - pQ // 2, coord[1] - pH // 2, coord[2] - pW // 2]
+        end_coord = [first_coord[0] + pQ, first_coord[1] + pH, first_coord[2] + pW]
+        first_ixs = [max(0, 0 - first_coord[0]), max(0, 0 - first_coord[1]), max(0, 0 - first_coord[2])]
+        end_ixs = [min(pQ, pQ + Q - end_coord[0]), min(pH, pH + H - end_coord[1]),
+                   min(pW, pW + W - end_coord[2])]
+        #print(first_ixs, end_ixs, first_coord, end_coord, patch_size, image_size)
+        rebuilded_image[
+            max(0, first_coord[0]): end_coord[0],
+            max(0, first_coord[1]): end_coord[1],
+            max(0, first_coord[2]): end_coord[2]
+        ] += (image_patch * gassian_map)[first_ixs[0]: end_ixs[0], first_ixs[1]: end_ixs[1], first_ixs[2]: end_ixs[2]]
+        weight_map[
+            max(0, first_coord[0]): end_coord[0],
+            max(0, first_coord[1]): end_coord[1],
+            max(0, first_coord[2]): end_coord[2]
+        ] += gassian_map[first_ixs[0]: end_ixs[0], first_ixs[1]: end_ixs[1], first_ixs[2]: end_ixs[2]]
+
+    rebuilded_image = rebuilded_image / (weight_map + 1e-8)
+    return rebuilded_image

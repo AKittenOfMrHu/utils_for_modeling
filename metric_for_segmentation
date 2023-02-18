@@ -1,0 +1,231 @@
+import torch
+import numpy as np
+import sklearn.metrics
+import torch.nn.functional as F
+
+
+def binary_dice(prd, lbl, smooth=1e-5, to_sigmoid=True, to_print=False):
+    '''
+    :param prd: (n, 1, x, y (, z)), torch.tensor
+    :param lbl: (n, x, y (, z)), torch.tensor
+    :param smooth:
+    :return:
+    '''
+    if to_sigmoid:
+        prd = torch.sigmoid(prd)
+    b = prd.shape[0]
+    prd = prd.view(b, -1)
+    lbl = lbl.view(b, -1)
+    inter = prd*lbl
+    if to_print:
+        print(b, inter.sum(1).item(), prd.pow(2).sum(1).item(), lbl.pow(2).sum(1).item())
+    dices = 2 * inter.sum(1)/(prd.pow(2).sum(1) + lbl.pow(2).sum(1) + smooth)
+    #dices = 2 * inter.sum(1) / (prd.sum(1) + lbl.sum(1) + smooth)
+
+    return dices.mean()
+
+
+def multi_cls_dice(prd, lbl, weight_it=False, class_weights=1., smooth=1e-5):
+    '''
+    :param prd: (n, c, x, y (, z)), torch.tensor
+    :param lbl: (n, x, y (, z)), torch.tensor
+    :param smooth:
+    :return:
+    '''
+    b, c = prd.shape[0:2]
+
+    if weight_it:
+        if not isinstance(class_weights, (tuple, list, np.ndarray)) and not torch.is_tensor(class_weights):
+            class_weights = torch.tensor([class_weights] * c)
+        else:
+            assert c == len(class_weights), f'There are {len(class_weights)} class weights but {c} class !'
+            class_weights = torch.tensor(class_weights) if not torch.is_tensor(class_weights) else class_weights
+
+    prd = F.softmax(prd, dim=1)
+    lbl = F.one_hot(lbl, c)
+
+    prd = prd.view(b, c,  -1)
+    lbl = lbl.view(b, -1, c).permute([0, 2, 1])
+    inter = prd*lbl
+    dices = 2 * inter.sum(2)/(prd.pow(2).sum(2) + lbl.pow(2).sum(2) + smooth)
+    if weight_it:
+        weighted_dices = torch.mul(dices, class_weights)
+        return weighted_dices.mean(dim=0)
+    else:
+        return dices.mean(dim=0)
+
+
+def binary_iou(prd, lbl, smooth=1e-5, to_sigmoid=True):
+    '''
+    :param prd: (b, 1, x, y (, z)), torch.tensor
+    :param lbl: (b, x, y (, z)), torch.tensor
+    :param smooth:
+    :return:
+    '''
+    b = prd.shape[0]
+    if to_sigmoid:
+        prd = torch.sigmoid(prd)
+    prd = prd.view(b, -1)
+    lbl = lbl.view(b, -1)
+    inter = prd * lbl
+    union = prd + lbl
+    ious = inter.sum(1) / ((union - inter).sum(1) + smooth)
+
+    return ious.mean()
+
+
+def multi_cls_iou(prd, lbl, weight_it=False, class_weights=1., smooth=1e-5):
+    '''
+    :param prd: (b, c, x, y (, z)), torch.tensor
+    :param lbl: (b, x, y (, z)), torch.tensor
+    :param smooth:
+    :return:
+    '''
+    b, c = prd.shape[0:2]
+    if weight_it:
+        if not isinstance(class_weights, (tuple, list, np.ndarray)) and not torch.is_tensor(class_weights):
+            class_weights = torch.tensor([class_weights] * c)
+        else:
+            assert c == len(class_weights), f'There are {len(class_weights)} class weights but {c} class !'
+            class_weights = torch.tensor(class_weights) if not torch.is_tensor(class_weights) else class_weights
+
+    prd = F.softmax(prd, dim=1)
+    prd = prd.view(b, c, -1)
+    lbl = lbl.view(b, -1, c).permute([0, 2, 1])
+    inter = prd * lbl
+    union = (prd + lbl) > 0
+    ious = inter.sum(2) / (union.sum(2) - inter.sum(2) + smooth)
+    if weight_it:
+        weighted_ious = torch.mul(ious, class_weights)
+        return weighted_ious.mean()
+    else:
+        return ious.mean()
+
+
+def binary_precision_sensitivity_specificity(prd, lbl, smooth=1e-5, to_sigmoid=True):
+    '''
+    :param prd: (b, 1, x, y (, z)), torch.tensor
+    :param lbl: (b, x, y (, z)), torch.tensor
+    :param smooth:
+    :return:
+    '''
+    b = prd.shape[0]
+    if to_sigmoid:
+        prd = torch.sigmoid(prd)
+    prd = prd.view(b, -1)
+    lbl = lbl.view(b, -1)
+
+    tp = prd * lbl
+    tn = (1 - prd) * (1 - lbl)
+    precision = tp.sum(1) / (prd.sum(1) + smooth)
+    sensitivity = tp.sum(1) / (lbl.sum(1) + smooth)
+    specificity = tn.sum(1) / ((1 - lbl).sum(1) + smooth)
+
+    return precision.mean(), sensitivity.mean(), specificity.mean()
+
+
+def multi_cls_precision_sensitivity_specificity(prd, lbl, smooth=1e-5):
+    '''
+    :param prd: (b, c, x, y (, z)), torch.tensor
+    :param lbl: (b, x, y (, z)), torch.tensor
+    :param smooth:
+    :return:
+    '''
+    b, c = prd.shape[0:2]
+    prd = F.softmax(prd, dim=1)
+    lbl = F.one_hot(lbl, c)
+    prd = prd.view(b, c, -1)
+    lbl = lbl.view(b, -1, c).permute([0, 2, 1])
+
+    tp = prd * lbl
+    tn = (1 - prd) * (1 - lbl)
+    precision = tp.sum(2) / (prd.sum(2) + smooth)
+    sensitivity = tp.sum(2) / (lbl.sum(2) + smooth)
+    specificity = tn.sum(2) / ((1 - lbl).sum(2) + smooth)
+
+    return precision.mean(), sensitivity.mean(), specificity.mean()
+
+
+def binary_auc_acc_prcs_npv_sens_spec_fpr_for_category(prd, lbl, smooth=1e-5, to_sigmoid=True):
+    '''
+    :param prd: (b, 1, x, y (, z)), torch.tensor
+    :param lbl: (b, x, y (, z)), torch.tensor
+    :param smooth:
+    :return:
+    '''
+
+    if to_sigmoid:
+        prd = torch.sigmoid(prd)
+    '''
+    prd = prd.view(1, -1)
+    lbl = lbl.view(1, -1)
+    prd = torch.cat([1 - prd, prd], dim=0)
+    lbl = torch.cat([1 - lbl, lbl], dim=0)
+
+    tp = prd * lbl
+    tn = (1 - prd) * (1 - lbl)
+    accuracy = (tp.sum(dim=1) + tn.sum(dim=1)) / (prd.sum(dim=1)+lbl.sum(dim=1)-tp.sum(dim=1)+tn.sum(dim=1))
+    precision = tp.sum(dim=1) / (prd.sum(dim=1) + smooth)
+    sensitivity = tp.sum(dim=1) / (lbl.sum(dim=1) + smooth)
+    specificity = tn.sum(dim=1) / ((1 - lbl).sum(dim=1) + smooth)
+    dice = 2 * precision * sensitivity / (precision + sensitivity + 1e-5)
+    
+    return accuracy.mean(), precision.mean(), sensitivity.mean(), specificity.mean(), dice.mean()
+    '''
+    prd = prd.cpu() if prd.is_cuda else prd
+    lbl = lbl.cpu() if lbl.is_cuda else lbl
+    prd = prd.view(-1)
+    lbl = lbl.view(-1)
+    tp = prd * lbl
+    tn = (1 - prd) * (1 - lbl)
+
+    auc = sklearn.metrics.roc_auc_score(lbl.int(), prd)
+    accuracy = (tp.sum() + tn.sum()) / (prd.sum() + lbl.sum() - tp.sum() + tn.sum())
+    precision = tp.sum() / (prd.sum() + smooth)  # ppv
+    npv = tn.sum() / (tn.sum() + lbl.sum() - tp.sum() + smooth)
+    sensitivity = tp.sum() / (lbl.sum() + smooth)  # tpr
+    specificity = tn.sum() / ((1 - lbl).sum() + smooth)  # tnr
+    fpr = (lbl-tp).sum() / ((1-prd).sum() + smooth)
+
+    return auc, accuracy, precision, npv, sensitivity, specificity, fpr
+
+
+def multi_acc_prcs_sens_spec_for_category(prd, lbl, smooth=1e-5, to_sigmoid=True):
+    '''
+    :param prd: (b, c, x, y (, z)), torch.tensor
+    :param lbl: (b, x, y (, z)), torch.tensor
+    :param smooth:
+    :return:
+    '''
+    b, c = prd.shape[0:2]
+    prd = F.softmax(prd, dim=1)
+    lbl = F.one_hot(lbl, c)
+    prd = prd.view(b, c, -1)
+    lbl = lbl.view(b, -1, c).permute([0, 2, 1])
+
+    tp = prd * lbl
+    tn = (1 - prd) * (1 - lbl)
+    precision = tp.sum(2) / (prd.sum(2) + smooth)
+    sensitivity = tp.sum(2) / (lbl.sum(2) + smooth)
+    specificity = tn.sum(2) / ((1 - lbl).sum(2) + smooth)
+
+    return precision.mean(), sensitivity.mean(), specificity.mean()
+
+
+def binary_roc(prd, lbl, to_sigmoid=True):
+    '''
+    :param prd: (n, 1)
+    :param lbl: (n)
+    :return:
+    '''
+    if to_sigmoid:
+        prd = torch.sigmoid(prd)
+    prd = prd.view(-1)
+    lbl = lbl.view(-1)
+
+    fpr, tpr, thresholds = sklearn.metrics.roc_curve(np.array(lbl), np.array(prd))
+    auc = sklearn.metrics.auc(fpr, tpr)
+
+    youden_index = np.argmax(tpr-fpr).reshape(-1)
+
+    return auc, fpr[youden_index], tpr[youden_index]

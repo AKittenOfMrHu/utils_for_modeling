@@ -1,0 +1,312 @@
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+
+
+class BinaryJaccardLoss(nn.Module):
+    def __init__(self, smooth=1e-5, to_sigmoid=True):
+        super(BinaryJaccardLoss, self).__init__()
+        self.smooth = smooth
+        self.to_sigmoid = to_sigmoid
+
+    def forward(self, prd, lbl):
+        if self.to_sigmoid:
+            prd = torch.sigmoid(prd)
+        b = prd.shape[0]
+        prd = prd.view(b, -1)
+        lbl = lbl.view(b, -1)
+        inter = prd * lbl
+        jaccard = (inter.sum(1) + self.smooth) / (prd.pow(2).sum(1) + lbl.pow(2).sum(1) - inter.sum(1) + self.smooth)
+        return 1 - jaccard.mean()
+
+class BinaryDiceLoss(nn.Module):
+    def __init__(self, smooth=1e-5, to_sigmoid=True):
+        super(BinaryDiceLoss, self).__init__()
+        self.smooth = smooth
+        self.to_sigmoid = to_sigmoid
+
+    def forward(self, prd, lbl):
+        '''
+        :param prd: (n, 1, x, y (, z)), torch.tensor
+        :param lbl: (n, x, y (, z)), torch.tensor
+        :param smooth:
+        :return:
+        '''
+        if self.to_sigmoid:
+            prd = torch.sigmoid(prd)
+        b = prd.shape[0]
+        prd = prd.view(b, -1)
+        lbl = lbl.view(b, -1)
+        inter = prd*lbl
+        dices = (2 * inter.sum(1) + self.smooth)/(prd.pow(2).sum(1) + lbl.pow(2).sum(1) + self.smooth)
+
+        return 1. - dices.mean()
+
+
+class BinaryDiceLossV1(nn.Module):
+    def __init__(self, smooth=1e-5):
+        super(BinaryDiceLossV1, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, prd, lbl):
+        '''
+        :param prd: (n, 2, x, y (, z)), torch.tensor
+        :param lbl: (n, x, y (, z)), torch.tensor
+        :param smooth:
+        :return:
+        '''
+        pred = prd.gather(1, )
+        b = prd.shape[0]
+        prd = prd.view(b, -1)
+        lbl = lbl.view(b, -1)
+        inter = prd*lbl
+        dices = (2 * inter.sum(1) + self.smooth)/(prd.pow(2).sum(1) + lbl.pow(2).sum(1) + self.smooth)
+
+        return 1. - dices.mean()
+
+
+class DiceMultiClsLoss(nn.Module):
+    def __init__(self, n_classes, weight=(0, 1,)):
+        super(DiceMultiClsLoss, self).__init__()
+        self.n_classes = n_classes
+        self.weight = torch.FloatTensor(weight).cuda()
+
+    def _one_hot_encoder(self, input_tensor):
+        tensor_list = []
+        for i in range(self.n_classes):
+            temp_prob = input_tensor == i  # * torch.ones_like(input_tensor)
+            tensor_list.append(temp_prob.unsqueeze(1))
+        output_tensor = torch.cat(tensor_list, dim=1)
+        return output_tensor.float()
+
+    def _dice_loss(self, score, target):
+        target = target.float()
+        smooth = 1e-5
+        intersect = torch.sum(score * target)
+        y_sum = torch.sum(target * target)
+        z_sum = torch.sum(score * score)
+        dice = (2 * intersect + smooth) / (z_sum + y_sum + smooth)
+        loss = 1 - dice
+        return loss
+
+    def forward(self, inputs, target):
+        inputs = torch.softmax(inputs, dim=1)
+        target = self._one_hot_encoder(target)
+        assert inputs.size() == target.size(), 'predict {} & target {} shape do not match'.format(inputs.size(),
+                                                                                                  target.size())
+        # class_wise_dice = []
+        losses = 0.0
+        for i in range(0, self.n_classes):
+            loss = self._dice_loss(inputs[:, i], target[:, i])
+            # class_wise_dice.append(1.0 - dice.item())
+            losses += loss * self.weight[i]
+        return losses / self.weight.sum()
+
+
+class MultiCELoss(nn.Module):
+    def __init__(self):
+        super(MultiCELoss, self).__init__()
+
+    def forward(self, input, target):
+
+        return
+
+
+class DiceWithLogitsLoss(nn.Module):
+    def __init__(self, smooth=1e-5):
+        super(DiceWithLogitsLoss, self).__init__()
+        self.smooth = smooth
+
+    def forward(self, prd, lbl):
+        '''
+        :param prd: (n, 1, x, y (, z)), torch.tensor
+        :param lbl: (n, x, y (, z)), torch.tensor
+        :param smooth:
+        :return:
+        '''
+        prd = torch.sigmoid(prd)
+        b = prd.shape[0]
+        prd = prd.view(b, -1)
+        lbl = lbl.view(b, -1)
+        inter = prd*lbl
+        dices = 2 * inter.sum(1)/(prd.pow(2).sum(1) + lbl.pow(2).sum(1) + self.smooth)
+
+        return 1. - dices.mean()
+
+
+class PartialHazardLoss(nn.Module):
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, log_risks, events, times):
+        events = np.array(events)
+        times = np.array(times)
+        ixs_risk = np.argwhere(events == 1).reshape(-1)
+        risk_loss = torch.tensor([0.]).cuda()
+        risk_num = 0.
+        for ix_risk in ixs_risk:
+            ixs_longer = np.argwhere(times >= times[ix_risk]).reshape(-1)
+            if len(ixs_longer) > 1:
+                risk_loss += log_risks[ix_risk] - torch.log(torch.sum(torch.exp(log_risks[ixs_longer])) + 1e-5)
+                risk_num += 1.
+        risk_loss = -1./(risk_num + 1e-5) * risk_loss
+        return risk_loss, risk_num
+
+
+class BinaryFocalLoss(nn.Module):
+    def __init__(self, alpha=0.25, gama=2):
+        super().__init__()
+        self.gama = gama
+        self.alpha = alpha
+        self.loss_func = nn.BCEWithLogitsLoss(reduce=False)
+
+    def forward(self, pred, target):
+        """
+        :param pred: (B, 1, q, h, w)
+        :param target: (B, 1, q, h, w)
+        """
+        loss = self.loss_func(pred, target.float())
+        pred = F.sigmoid(pred)
+        pt = torch.where(target == 1, pred, 1 - pred)
+        with torch.no_grad():
+            alpha = torch.zeros_like(target)
+            alpha[target > 0] = self.alpha
+            alpha[target == 0] = 1 - self.alpha
+
+        if pred.is_cuda:
+            alpha = alpha.cuda()
+        loss = alpha*torch.pow(1-pt, self.gama)*loss
+        return loss.mean()
+
+
+class MultiClassFocalLoss(nn.Module):
+    def __init__(self, alpha=0.25, gama=2):
+        super().__init__()
+        self.gama = gama
+        self.alpha = alpha
+        self.loss_func = nn.CrossEntropyLoss(reduce=False)
+
+    def forward(self, pred, target):
+        """
+        :param pred: (B, c, q, h, w)
+        :param target: (B, q, h, w)
+        """
+        loss = self.loss_func(pred, target)
+        pred = F.softmax(pred, dim=1)
+        pt = pred.gather(1, target[:, None, :]).squeeze()
+        with torch.no_grad():
+            alpha = torch.zeros_like(target)
+            alpha[target>0] = self.alpha
+            alpha[target==0] = 1 - self.alpha
+
+        if pred.is_cuda:
+            alpha = alpha.cuda()
+
+        loss = alpha*torch.pow(1-pt, self.gama)*loss
+        return loss.mean()
+
+
+class GHMLoss(nn.Module):
+    def __init__(self, bins=10):
+        super().__init__()
+        self.bins = bins
+        self.edges = torch.arange(self.bins + 1).float() / bins
+        self.loss = nn.NLLLoss(reduce=False)
+
+    def forward(self, pred, target):
+        """
+        :param pred: (B, 2, 48, 512, 512)
+        :param target: (B, 48, 512, 512)
+        """
+        b, q, h, w = target.shape
+        pred_ = torch.exp(pred).detach()
+        pred_[:, 0, :] = 1. - pred_[:, 0, :]
+        pred_ = torch.gather(pred_, 1, target[:, None, :, :, :]).squeeze(1)
+        g = torch.abs(pred_ - target)
+        weights = torch.zeros(target.shape, dtype=torch.float32).cuda()
+        # print(g.max(), self.edges.max())
+
+        n = 0
+        for i in range(self.bins):
+            inds = (g >= self.edges[i]) & (g < self.edges[i+1])
+            num_in_bin = inds.sum()
+            for k in range(b):
+                if num_in_bin > 0:
+                    n += 1
+                    weights[inds] = b*q*h*w / num_in_bin.item()
+
+        inds = (weights == 0.)
+        num_in_bin = inds.sum()
+        for k in range(b):
+            if num_in_bin > 0:
+                n += 1
+                weights[inds] = b*q*h*w / num_in_bin.item()
+
+        loss = self.loss(pred, target)*weights/n
+        #print(self.loss(pred, target).shape)
+        #print(loss.mean(), loss.sum()/b)
+        return loss.mean()
+
+
+class PointRendLoss(nn.Module):
+    def __init__(self, planes, grid_size, pg_range=(0.6, 0.85), point_num=1024, shift=10):
+        super(PointRendLoss, self).__init__()
+        self.grid_size = grid_size
+        grid_range = [torch.linspace(-1, 1, i) for i in grid_size]
+        self.grid = torch.stack(torch.meshgrid(*grid_range), dim=-1)
+        self.pg_range = pg_range
+        self.point_num = point_num
+        self.shift = shift
+        self.adja_num = 1 if shift == 0 else 9
+
+        self.layer1 = nn.Sequential(
+            nn.Linear(planes[0], planes[1]),
+            nn.PReLU(),
+        )
+        self.layer2 = nn.Sequential(
+            nn.Linear(planes[1]*self.adja_num, planes[1]),
+            nn.PReLU(),
+            nn.Linear(planes[1], 1)
+        )
+
+    def forward(self, y, p, feature_maps):
+        N, C, Q, H, W = p.shape
+        assert len(y.shape) == len(p.shape)
+        p = torch.sigmoid(p)
+        p_grad_len = torch.abs(y.detach() - p.detach())
+        weight = (torch.ravel(p_grad_len) >= self.pg_range[0] & torch.ravel(p_grad_len) <= self.pg_range[0]).float()
+        weight = weight*1./(weight.sum() + 1e-5)
+        coords = np.unravel_index(np.random.choice(len(weight), self.point_num, p=weight.cpu()), y.shape[-3:])
+        coords = torch.from_numpy(coords).cuda() if p.is_cuda else torch.from_numpy(coords)
+        adja_coords = [coords]
+        if self.shift != 0:
+            sd = self.shift
+            for shift in [[-sd, -sd, -sd], [-sd, -sd, 0], [-sd, 0, 0], [0, -sd, 0], [0, 0, -sd],
+                          [sd, 0, 0], [0, sd, 0], [0, 0, sd], [sd, sd, 0], [sd, 0, sd], [sd, sd, sd]]:
+                adja_coords.append(coords + np.array(shift))
+
+        map_points = []
+        for i, feature_map in enumerate(feature_maps):
+            grid_sample = F.grid_sample(feature_map, self.grid, mode='trilinear', align_corners=True)
+            adja_points = []
+            for coords in adja_coords:
+                points = grid_sample[:, :, coords[:, 0], coords[:, 1], coords[:, 2]]
+                adja_points.append(points)
+            adja_points = torch.stack(adja_points, dim=-1)
+            map_points.append(adja_points)
+        map_points = torch.cat(map_points, dim=1).permute([0, 2, 3, 1]).reshape([N*self.point_num, self.adja_num, -1])
+        point_classes = y[:, 0, coords[:, 0], coords[:, 1], coords[:, 2]]
+
+        point_outs = self.layer2(self.layer1(map_points).view(N*self.point_num, -1))
+
+        loss = F.binary_cross_entropy_with_logits(point_outs, point_classes)
+        return loss
+
+
+if __name__ == '__main__':
+    #loss = FocalLoss()
+    vector = torch.tensor([[0, 0, 0, 0, 0], [1, 1, 1, 1, 1]])
+    labels = torch.tensor([0, 1])
+    print(torch.log(vector[4:, :]/0.1).sum())
+    print(torch.cat([vector, vector[labels == 2., :], vector[4:, :]], dim=0))

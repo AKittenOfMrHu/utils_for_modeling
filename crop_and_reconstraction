@@ -156,7 +156,7 @@ def patch3d_step_rebuild(image_patches, patch_coords, image_size, gassian_map, p
     return rebuilded_image
     
     # ================= 2d renconstraction with gassin map
-    def recons_image2D(patches, step_num, shape, gaussian_map=None):
+def recons_image2D(patches, step_num, shape, gaussian_map=None):
     c, q, h, w = patches[0].shape
     patch_size = [h, w]
     step_size = [ps//2 for ps in patch_size]

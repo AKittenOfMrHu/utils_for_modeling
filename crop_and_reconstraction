@@ -154,3 +154,54 @@ def patch3d_step_rebuild(image_patches, patch_coords, image_size, gassian_map, p
 
     rebuilded_image = rebuilded_image / (weight_map + 1e-8)
     return rebuilded_image
+    
+    # ================= 2d renconstraction with gassin map
+    def recons_image2D(patches, step_num, shape, gaussian_map=None):
+    c, q, h, w = patches[0].shape
+    patch_size = [h, w]
+    step_size = [ps//2 for ps in patch_size]
+    padding_size = [patch_size[i] - step_size[i] for i in range(2)]
+
+    # print(step_num, shape, padding_size)
+    recon_size = [max(shape[i], step_num[i] * step_size[i] + padding_size[i]) for i in range(2)]
+    recons = np.zeros([c, q] + recon_size, dtype='float32')
+    if gaussian_map is None:
+        gaussian_map = np.zeros(patch_size, dtype='float32')
+        gaussian_map[patch_size[0] // 2, patch_size[1] // 2] = 1.
+        sigmas = [ps * 0.8 for ps in patch_size]
+        gaussian_map = gaussian_filter(gaussian_map, sigmas, mode='constant', cval=0.0)
+        gaussian_map[gaussian_map == 0.] = np.min(gaussian_map[gaussian_map != 0.])
+        gaussian_map /= np.max(gaussian_map)
+
+    '''
+    recon_size = recons.shape
+    recon_map = np.zeros(recon_size,  dtype='float32') + 4.
+    ranges = [np.arange(s) for s in recon_size]
+    mesh_q, mesh_h, mesh_w = np.meshgrid(*ranges, indexing='ij')
+
+    recon_map[(mesh_h < step_size[0]) | (mesh_h > (recon_size[1] - step_size[0] - 1))] /= 2.
+    recon_map[(mesh_w < step_size[1]) | (mesh_w > (recon_size[2] - step_size[1] - 1))] /= 2.
+    '''
+    for step_hi in range(step_num[0]):
+        for step_wi in range(step_num[1]):
+            step_i = step_hi * step_num[1] + step_wi
+            patch_i = patches[step_i]
+            recons[
+                :,
+                :,
+                step_hi * step_size[0]: step_hi * step_size[0] + patch_size[0],
+                step_wi * step_size[1]: step_wi * step_size[1] + patch_size[1]
+            ] += patch_i * gaussian_map
+
+    #recons = np.divide(recons, recon_map + 1e-8)
+    return recons[:, :, 0: shape[0], 0: shape[1]]
+    
+    
+def get_gsnmap2d(patch_size):
+    gaussian_map = np.zeros(patch_size,  dtype='float32')
+    gaussian_map[patch_size[0] // 2, patch_size[1] // 2] = 1.
+    sigmas = [ps * 0.42 for ps in patch_size]
+    gaussian_map = gaussian_filter(gaussian_map, sigmas, mode='constant', cval=0.0)
+    gaussian_map[gaussian_map == 0.] = np.min(gaussian_map[gaussian_map != 0.])
+    gaussian_map /= np.max(gaussian_map)
+    return gaussian_map

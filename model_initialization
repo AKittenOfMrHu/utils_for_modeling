@@ -1,5 +1,9 @@
+import os
 import torch
 import torch.nn as nn
+
+# python train_model.py --cuda_visible_devices '5' 
+os.environ['CUDA_VISIBLE_DEVICES'] = '0, 1, 2'
 
 def set_seed(seed):
     random.seed(seed)

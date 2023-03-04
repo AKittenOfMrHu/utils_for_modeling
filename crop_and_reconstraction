@@ -200,7 +200,7 @@ def recons_image2D(patches, step_num, shape, gaussian_map=None):
 def get_gsnmap2d(patch_size):
     gaussian_map = np.zeros(patch_size,  dtype='float32')
     gaussian_map[patch_size[0] // 2, patch_size[1] // 2] = 1.
-    sigmas = [ps * 0.42 for ps in patch_size]
+    sigmas = [ps * 0.2121 for ps in patch_size]
     gaussian_map = gaussian_filter(gaussian_map, sigmas, mode='constant', cval=0.0)
     gaussian_map[gaussian_map == 0.] = np.min(gaussian_map[gaussian_map != 0.])
     gaussian_map /= np.max(gaussian_map)

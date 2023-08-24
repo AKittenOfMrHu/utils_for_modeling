@@ -1,0 +1,31 @@
+import numpy as np
+import pandas as pd
+import scipy.stats
+
+#path = r'D:\writting for OT segmentation\metric\metric_info v1.xlsx'
+path = r'E:\IDEA_work\ovarian tumor segmentation\ablation_results\mPnum_info.xlsx'
+sheet_names = ['Dice', 'DSC', 'JC', 'HD95', 'Sens', 'Prec', 'PPV', 'ASD']
+#sheet_names = ['Dice', 'JC', 'PPV']
+#cols = ['Ours', 'wtErMr', 'wtMr', 'wtCO', 'wtCpa', 'GGNet3D', 'DAF3D', '3D IFPN', '3D U-Net', 'DB U-Net', 'V-Net']
+#cols = ['Ours', 'GGNet3D', 'DAF3D', '3D IFPN', '3D U-Net', 'V-Net']
+cols = ['m800', 'm1600', 'm2400', 'm3200', 'm4000', 'm4800']
+#cols.reverse()
+for sheet_name in sheet_names:
+    print(f'================= {sheet_name} ==================')
+    info = pd.read_excel(path, sheet_name, engine='openpyxl')
+    for key in cols:
+        raws = list(range(29, 75))
+        #print(info.index.to_list())
+        #print(info.loc[0, :].to_list())
+        values = info.loc[:, key].to_numpy()
+        if sheet_name in ['HD95', 'ASD']:
+            mean, std = scipy.stats.norm.fit(values)
+            conf_intveral = scipy.stats.norm.interval(0.95, loc=mean, scale=std / np.sqrt(values.shape[0]))
+            mean_ci = (conf_intveral[1] - conf_intveral[0]) / 2.
+            print(f'{key} -- mean: {mean:.2f}; ci: {mean_ci:.2f} ')
+        else:
+            mean, std = scipy.stats.norm.fit(values)
+            conf_intveral = scipy.stats.norm.interval(0.95, loc=mean, scale=std / np.sqrt(values.shape[0]))
+            mean_ci = (conf_intveral[1] - conf_intveral[0]) / 2.
+            print(f'{key} -- mean: {mean*100:.2f}; ci: {mean_ci*100:.2f} ')
+

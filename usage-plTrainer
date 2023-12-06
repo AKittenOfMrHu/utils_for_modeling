@@ -1,2 +1,56 @@
 import pytorch_lightning  as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
+
+
+checkpoint_callback = ModelCheckpoint(
+            monitor = "acc", # monitor name
+            filename='l-{epoch:d}-{acc:.3f}',
+            save_top_k = 20, 
+            mode = "max",
+            # dirpath='my/path/'
+        )
+
+#1.1 for signle gpu or multi gpus, a simple way
+trianer = pl.Trainer(
+    deterministic=True, # True, Might make your system slower, but ensures reproducibility;
+    gpus = devices, # devices id num=1 or list like [0, 1]; num=-1 means using all gpu;
+
+    max_epochs=max_epoch, 
+    # min_epochs = min_epoch,
+    # auto_lr_find = True, # If set to True, will make trainer.tune() run a learning rate finder,
+    # accumulate_grad_batch = 4, # Updating parameters after 4 steps;
+    num_sanity_val_steps=0,
+    val_check_interval=0.1, # How often to check the validation set. Use float to check within a training epoch, use int to check every n steps (batches).
+    check_val_every_n_epoch=1, # Check val every n train epochs.
+
+    # enable_checkpointing=True, # default used by Trainer, saves the most recent model to a single checkpoint after each epoch
+    default_root_dir="some/path/", # To change the checkpoint path
+    callbacks = [checkpoint_callback]
+    
+)
+model = MyLightningModule.load_from_checkpoint("/path/to/checkpoint.ckpt") # load checkpoint
+
+#1.2 for signle gpu or multi gpus, a simple way
+trianer = pl.Trainer(
+    devices=[1, 3],  # devices id num=1 or list like [0, 1]; num=-1 means using all gpu;
+    accelerator="gpu", # "cpu", "gpu", "tpu", "ipu", "auto";
+    max_epochs=max_epoch
+)
+
+#2 for multi gpus
+trainer = pl.Trainer(
+    deterministic=True,
+    devices=[1, 3],
+    accelerator="gpu",
+    strategy="ddp", # "dp", "ddp", "ddp2", "fsdp";
+
+    max_epoch=max_epoch,
+    sync_batchnorm = True, # Synchronize batch norm layers between process groups/whole world.
+    num_sanity_val_steps=2, # Sanity check runs n validation batches before starting the training routine. Set it to `-1` to run all batches in all validation dataloaders.
+    val_check_interval=0.1,
+    check_val_every_n_epoch=1, 
+
+    default_root_dir="some/path/",
+    callbacks=[checkpoint_callback]
+)
+
